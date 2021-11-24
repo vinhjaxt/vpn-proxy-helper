@@ -1,7 +1,7 @@
 # VPN Proxy Helper
-Sometimes, VPN clients do not change the routing table of the computer but it still exists the VPN interface.
-Sometimes, you don't want to transfer all your network over a VPN Network.
-It's time for time you might want a VPN Proxy Helper - Proxy server when out going traffic is over the local network interface (including VPN interface).
+* Sometimes, VPN clients do not change the routing table of the computer but it still exists the VPN interface.
+* Sometimes, you don't want to transfer all your network over a VPN Network.
+It's time for time you might want a VPN Proxy Helper - a proxy server when out going traffic is over the local network interface (including VPN interface).
 
 # vpn-proxy-helper --help
 ```
