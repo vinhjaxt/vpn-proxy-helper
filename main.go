@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"strings"
+	"time"
 
 	socks5 "github.com/haxii/socks5"
 )
@@ -15,6 +16,8 @@ type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
 var localInterfaceAddr = flag.String("i", "", "Out going Local Network Interface Address")
 var bindAddr = flag.String("l", "127.0.0.1:1080", "Bind address")
+
+const dialTimeout = 20 * time.Second
 
 func getDialFunc(localAddr string) (DialFunc, error) {
 	netInterfaces, err := net.Interfaces()
@@ -41,6 +44,7 @@ func getDialFunc(localAddr string) (DialFunc, error) {
 					LocalAddr: &net.TCPAddr{
 						IP: addr.(*net.IPNet).IP,
 					},
+					Timeout: dialTimeout,
 				}
 				return dialer.DialContext, nil
 			}
@@ -60,6 +64,11 @@ func main() {
 			log.Panicln(err)
 		}
 		log.Println("Network going out interface:", *localInterfaceAddr)
+	}
+	if dialer == nil {
+		dialer = (&net.Dialer{
+			Timeout: dialTimeout,
+		}).DialContext
 	}
 
 	conf := &socks5.Config{
