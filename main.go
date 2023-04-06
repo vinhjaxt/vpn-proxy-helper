@@ -78,6 +78,8 @@ func httpsHandler(ctx *fasthttp.RequestCtx, addr string) error {
 	ctx.Response.Header.Set("Connection", "keep-alive")
 	ctx.Response.Header.Set("Keep-Alive", "timeout=120, max=5")
 	ctx.Hijack(func(clientConn net.Conn) {
+		defer clientConn.Close()
+		defer conn.Close()
 		go io.Copy(clientConn, conn)
 		io.Copy(conn, clientConn)
 	})
