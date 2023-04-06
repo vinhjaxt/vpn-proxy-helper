@@ -14,7 +14,7 @@ import (
 
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
-var localInterfaceAddr = flag.String("i", "", "Out going Local Network Interface Address")
+var localInterfaceAddr = flag.String("i", "", "Out going Local Network Interface Address or Interface Name")
 var bindAddr = flag.String("l", "127.0.0.1:1080", "Bind address")
 
 const dialTimeout = 20 * time.Second
@@ -51,7 +51,7 @@ func getDialFunc(localAddr string) (DialFunc, error) {
 			}
 		}
 	}
-	return nil, errors.New(`interface for ip ` + *localInterfaceAddr + ` not found` + ips)
+	return nil, errors.New(`interface for ` + *localInterfaceAddr + ` not found` + ips)
 }
 
 func main() {
