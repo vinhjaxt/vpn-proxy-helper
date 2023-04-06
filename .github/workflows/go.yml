@@ -1,0 +1,44 @@
+# This workflow will build a golang project
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
+
+name: Go
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v3
+      with:
+        go-version: 1.19
+
+    - name: Build
+      run: |
+        GOOS=linux GOARCH=amd64 go build -o vpn-proxy-helper-socks5-amd64 -v ./...
+        GOOS=linux GOARCH=386 go build -o vpn-proxy-helper-socks5-386 -v ./...
+        GOOS=windows GOARCH=amd64 go build -o vpn-proxy-helper-socks5-amd64.exe -v ./...
+        GOOS=windows GOARCH=386 go build -o vpn-proxy-helper-socks5-386.exe -v ./...
+
+    # Create release
+    - name: Generate release tag
+      id: tag
+      run: |
+        sudo timedatectl set-timezone Asia/Ho_Chi_Minh
+        sudo date -s "$(wget -qSO- --max-redirect=0 google.com 2>&1 | grep Date: | cut -d' ' -f5-8)Z"
+        echo "release_tag=ActionBuild_$(date +"%Y.%m.%d_%H-%M-%S")" >> $GITHUB_OUTPUT
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.tag.outputs.release_tag }}
+        files: |
+          ./vpn-proxy-helper-socks5*
+    # Done release
