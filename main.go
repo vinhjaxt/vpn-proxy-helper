@@ -18,7 +18,7 @@ import (
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
 var dialer DialFunc
-var localInterfaceAddr = flag.String("i", "", "Out going Local Network Interface Address")
+var localInterfaceAddr = flag.String("i", "", "Out going Local Network Interface Address or Interface Name")
 var bindAddr = flag.String("l", "127.0.0.1:8081", "Bind address")
 
 var uncatchRecover = func() {
@@ -154,6 +154,7 @@ func getDialFunc(localAddr string) (DialFunc, error) {
 			log.Println(netInterface.Name, err)
 			continue
 		}
+		isIfn := netInterface.Name == *localInterfaceAddr
 		for _, addr := range addrs {
 			ipAddr := addr.String()
 			idx := strings.IndexRune(ipAddr, '/')
@@ -161,7 +162,7 @@ func getDialFunc(localAddr string) (DialFunc, error) {
 				ipAddr = ipAddr[0:idx]
 			}
 			ips += ", " + ipAddr
-			if ipAddr == *localInterfaceAddr {
+			if isIfn || ipAddr == *localInterfaceAddr {
 				dialer := &net.Dialer{
 					LocalAddr: &net.TCPAddr{
 						IP: addr.(*net.IPNet).IP,
@@ -172,7 +173,7 @@ func getDialFunc(localAddr string) (DialFunc, error) {
 			}
 		}
 	}
-	return nil, errors.New(`interface for ip ` + *localInterfaceAddr + ` not found` + ips)
+	return nil, errors.New(`interface for ` + *localInterfaceAddr + ` not found` + ips)
 }
 
 func main() {
