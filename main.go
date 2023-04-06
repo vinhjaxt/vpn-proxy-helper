@@ -32,6 +32,7 @@ func getDialFunc(localAddr string) (DialFunc, error) {
 			log.Println(netInterface.Name, err)
 			continue
 		}
+		isIfn := netInterface.Name == *localInterfaceAddr
 		for _, addr := range addrs {
 			ipAddr := addr.String()
 			idx := strings.IndexRune(ipAddr, '/')
@@ -39,7 +40,7 @@ func getDialFunc(localAddr string) (DialFunc, error) {
 				ipAddr = ipAddr[0:idx]
 			}
 			ips += ", " + ipAddr
-			if ipAddr == *localInterfaceAddr {
+			if isIfn || ipAddr == *localInterfaceAddr {
 				dialer := &net.Dialer{
 					LocalAddr: &net.TCPAddr{
 						IP: addr.(*net.IPNet).IP,
