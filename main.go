@@ -19,8 +19,19 @@ type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
 var dialer DialFunc
 var localInterfaceAddr = flag.String("i", "", "Out going Local Network Interface Address or Interface Name")
+var basicAuth = flag.String("basic-auth", "Basic YWRtaW46MTIz", "Proxy authenticate. Eg: Basic YWRtaW46MTIz")
 var bindAddr = flag.String("l", "127.0.0.1:8081", "Bind address")
-
+var removeHeaders = []string{
+	// "Connection",          // Connection
+	"Proxy-Connection", // non-standard but still sent by libcurl and rejected by e.g. google
+	// "Keep-Alive",          // Keep-Alive
+	"Proxy-Authenticate",  // Proxy-Authenticate
+	"Proxy-Authorization", // Proxy-Authorization
+	// "Te",                  // canonicalized version of "TE"
+	// "Trailer",             // not Trailers per URL above; https://www.rfc-editor.org/errata_search.php?eid=4522
+	// "Transfer-Encoding",   // Transfer-Encoding
+	// "Upgrade", // Upgrade
+}
 var uncatchRecover = func() {
 	if r := recover(); r != nil {
 		log.Println("Uncatched error:", r, string(debug.Stack()))
@@ -67,42 +78,10 @@ func httpsHandler(ctx *fasthttp.RequestCtx, addr string) error {
 	ctx.Response.Header.Set("Connection", "keep-alive")
 	ctx.Response.Header.Set("Keep-Alive", "timeout=120, max=5")
 	ctx.Hijack(func(clientConn net.Conn) {
-		go ioTransfer(clientConn, conn)
-		ioTransfer(conn, clientConn)
+		go io.Copy(clientConn, conn)
+		io.Copy(conn, clientConn)
 	})
 	return nil
-}
-
-func ioTransfer(destination net.Conn, source net.Conn) {
-	defer func() {
-		uncatchRecover()
-		time.Sleep(time.Second)
-		source.Close()
-		destination.Close()
-	}()
-	buf := make([]byte, 8192)
-	for {
-		source.SetReadDeadline(time.Now().Add(dialTimeout))
-		nr, err := source.Read(buf)
-		if nr > 0 {
-			buf = buf[:nr]
-			destination.SetWriteDeadline(time.Now().Add(dialTimeout))
-			nw, err := destination.Write(buf)
-			if nr != nw {
-				break
-			}
-			if err != nil {
-				// log.Println("ioTransfer w", err)
-				break
-			}
-		}
-		if err != nil {
-			if err != io.EOF {
-				// log.Println("ioTransfer r", err)
-			}
-			break
-		}
-	}
 }
 
 func requestHandler(ctx *fasthttp.RequestCtx) {
@@ -110,6 +89,14 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 	// Some library must set header: Connection: keep-alive
 	// ctx.Response.Header.Del("Connection")
 	// ctx.Response.ConnectionClose() // ==> false
+	
+	if len(*basicAuth) != 0 {
+		if string(ctx.Request.Header.Peek("Proxy-Authenticate")) != *basicAuth {
+			ctx.SetStatusCode(407)
+			ctx.Response.Header.Set(`Proxy-Authenticate`, `Basic realm="Access to the internal site"`)
+		}
+		// pass
+	}
 
 	// https connecttion
 	if bytes.Equal(ctx.Method(), []byte("CONNECT")) {
@@ -134,6 +121,10 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
+	// http handler
+	for _, v := range removeHeaders {
+		ctx.Request.Header.Del(v)
+	}
 	err := httpClient.DoTimeout(&ctx.Request, &ctx.Response, httpClientTimeout)
 	if err != nil {
 		ctx.SetStatusCode(fasthttp.StatusInternalServerError)
@@ -195,12 +186,15 @@ func main() {
 	}
 
 	server := &fasthttp.Server{
-		Handler:              requestHandler,
-		ReadTimeout:          dialTimeout, // 120s
-		WriteTimeout:         dialTimeout,
-		MaxKeepaliveDuration: time.Minute,
-		MaxRequestBodySize:   20 * 1024 * 1024, // 20MB
-		DisableKeepalive:     false,
+		Handler:               requestHandler,
+		ReadTimeout:           dialTimeout, // 120s
+		WriteTimeout:          dialTimeout,
+		MaxKeepaliveDuration:  time.Minute,
+		MaxRequestBodySize:    20 * 1024 * 1024, // 20MB
+		DisableKeepalive:      false,
+		ReadBufferSize:        2 * 4096, // Make sure these are big enough.
+		NoDefaultServerHeader: true,
+		ReduceMemoryUsage:     true,
 	}
 
 	log.Println("HTTP Proxy server is running at:", *bindAddr)
