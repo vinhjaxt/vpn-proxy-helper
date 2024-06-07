@@ -23,10 +23,10 @@ jobs:
 
     - name: Build
       run: |
-        GOOS=linux GOARCH=amd64 go build -o vpn-proxy-helper-socks5-amd64 -v ./...
-        GOOS=linux GOARCH=386 go build -o vpn-proxy-helper-socks5-386 -v ./...
-        GOOS=windows GOARCH=amd64 go build -o vpn-proxy-helper-socks5-amd64.exe -v ./...
-        GOOS=windows GOARCH=386 go build -o vpn-proxy-helper-socks5-386.exe -v ./...
+        CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-extldflags=-static -s -w " -o vpn-proxy-helper-socks5-amd64.exe
+        CGO_ENABLED=0 GOOS=windows GOARCH=386 go build -trimpath -ldflags="-extldflags=-static -s -w " -o vpn-proxy-helper-socks5-386.exe
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-extldflags=-static -s -w" -o vpn-proxy-helper-socks5-amd64
+        CGO_ENABLED=0 GOOS=linux GOARCH=386 go build -trimpath -ldflags="-extldflags=-static -s -w" -o vpn-proxy-helper-socks5-386
 
     # Create release
     - name: Generate release tag
