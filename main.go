@@ -6,6 +6,7 @@ import (
 	"flag"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -15,7 +16,7 @@ import (
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
 var localInterfaceAddr = flag.String("i", "", "Out going Local Network Interface Address or Interface Name")
-var bindAddr = flag.String("l", "127.0.0.1:1080", "Bind address")
+var listen = flag.String("l", "127.0.0.1:1080", "Bind address")
 
 const dialTimeout = 20 * time.Second
 
@@ -80,10 +81,30 @@ func main() {
 		log.Panicln(err)
 	}
 
-	log.Println("Socks5 server is running at:", *bindAddr)
-	log.Println("Usage: socks5://" + *bindAddr)
-	log.Println("Eg: curl -x socks5://" + *bindAddr + " https://1.1.1.1/cdn-cgi/trace")
-	if err := server.ListenAndServe("tcp", *bindAddr); err != nil {
+	// Server
+	var ln net.Listener
+	if strings.HasPrefix(*listen, `unix:`) {
+		unixFile := (*listen)[5:]
+		os.Remove(unixFile)
+		ln, err = net.Listen(`unix`, unixFile)
+		os.Chmod(unixFile, os.ModePerm)
+		log.Println(`Listening:`, unixFile)
+	} else {
+		ln, err = net.Listen(`tcp`, *listen)
+		log.Println(`Listening:`, ln.Addr().String())
+	}
+	if err != nil {
+		log.Panicln(err)
+	}
+	if ln == nil {
+		log.Panicln(`Error listening:`, *listen)
+	}
+
+	log.Println("Socks5 server is running at:", *listen)
+	log.Println("Usage: socks5://" + *listen)
+	log.Println("Eg: curl -x socks5://" + *listen + " https://1.1.1.1/cdn-cgi/trace")
+
+	if err := server.Serve(ln); err != nil {
 		log.Panicln(err)
 	}
 
