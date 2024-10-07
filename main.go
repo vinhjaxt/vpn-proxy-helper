@@ -145,10 +145,6 @@ func loadDialFunc() {
 			}
 		}
 	}
-	if tcpDialer.LocalAddr == nil && tcpDialerV6.LocalAddr == nil {
-		log.Println(`local interface name or ip not found`)
-		return
-	}
 
 	if !tempIpv4.Equal(lastIpv4) {
 		lastLocalAddr.Store(tempIpv4)
@@ -161,6 +157,7 @@ func loadDialFunc() {
 		dialFunc6Atomic.Store(DialFunc(tcpDialerV6.Dial))
 		log.Println(`change local ipv6`, tempIpv6)
 	}
+
 }
 
 var zeroTime time.Time
