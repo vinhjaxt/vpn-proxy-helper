@@ -1,20 +1,18 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
-	"fmt"
-	"io"
 	"log"
 	"net"
 	"os"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/go-gost/gosocks5"
-	"github.com/go-gost/gosocks5/server"
+	"github.com/things-go/go-socks5"
+	"github.com/things-go/go-socks5/statute"
 )
 
 type DialFunc func(network, addr string) (net.Conn, error)
@@ -26,9 +24,6 @@ var dialFuncAtomic = &atomic.Value{}
 var dialFunc6Atomic = &atomic.Value{}
 var lastLocalAddr = &atomic.Value{}
 var lastLocal6Addr = &atomic.Value{}
-var handler = &serverHandler{
-	selector: server.DefaultSelector,
-}
 
 func loadDialFunc() {
 	var lastIpv4 net.IP
@@ -166,13 +161,6 @@ func loadDialFunc() {
 
 }
 
-func serve(l net.Conn) {
-	err := handler.Handle(l)
-	if err != nil {
-		log.Println(err)
-	}
-}
-
 func main() {
 	flag.Parse()
 
@@ -208,102 +196,31 @@ func main() {
 		}
 	}()
 
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		go serve(conn)
-	}
+	server := socks5.NewServer(
+		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		socks5.WithDialAndRequest(func(ctx context.Context, network, addr string, request *socks5.Request) (net.Conn, error) {
 
-}
+			log.Println(`=>`, addr)
 
-type serverHandler struct {
-	selector gosocks5.Selector
-}
+			var dialFunc DialFunc
 
-func (h *serverHandler) Handle(conn net.Conn) error {
-	conn = gosocks5.ServerConn(conn, h.selector)
-	req, err := gosocks5.ReadRequest(conn)
-	if err != nil {
-		return err
-	}
+			if request.DestAddr.AddrType == statute.ATYPIPv6 {
+				if v := dialFunc6Atomic.Load(); v == nil {
+					return nil, errors.New(`no dial6 func`)
+				} else {
+					dialFunc = v.(DialFunc)
+				}
+			} else {
+				if v := dialFuncAtomic.Load(); v == nil {
+					return nil, errors.New(`no dial func`)
+				} else {
+					dialFunc = v.(DialFunc)
+				}
+			}
 
-	switch req.Cmd {
-	case gosocks5.CmdConnect:
-		return h.handleConnect(conn, req)
+			return dialFunc(network, addr)
+		}),
+	)
 
-	default:
-		return fmt.Errorf("%d: unsupported command", gosocks5.CmdUnsupported)
-	}
-}
-
-func (h *serverHandler) handleConnect(conn net.Conn, req *gosocks5.Request) error {
-
-	log.Println(`=> `, req.Addr.String())
-
-	var dialFunc DialFunc
-
-	if req.Addr.Type == gosocks5.AddrIPv6 {
-		if v := dialFunc6Atomic.Load(); v == nil {
-			return errors.New(`no dial6 func`)
-		} else {
-			dialFunc = v.(DialFunc)
-		}
-	} else {
-		if v := dialFuncAtomic.Load(); v == nil {
-			return errors.New(`no dial func`)
-		} else {
-			dialFunc = v.(DialFunc)
-		}
-	}
-
-	cc, err := dialFunc("tcp", req.Addr.String())
-	if err != nil {
-		rep := gosocks5.NewReply(gosocks5.HostUnreachable, nil)
-		rep.Write(conn)
-		return err
-	}
-	defer cc.Close()
-
-	rep := gosocks5.NewReply(gosocks5.Succeeded, nil)
-	if err := rep.Write(conn); err != nil {
-		return err
-	}
-
-	return transport(conn, cc)
-}
-
-var (
-	trPool = sync.Pool{
-		New: func() interface{} {
-			return make([]byte, 1500)
-		},
-	}
-)
-
-func transport(rw1, rw2 io.ReadWriter) error {
-	errc := make(chan error, 1)
-	go func() {
-		buf := trPool.Get().([]byte)
-		defer trPool.Put(buf)
-
-		_, err := io.CopyBuffer(rw1, rw2, buf)
-		errc <- err
-	}()
-
-	go func() {
-		buf := trPool.Get().([]byte)
-		defer trPool.Put(buf)
-
-		_, err := io.CopyBuffer(rw2, rw1, buf)
-		errc <- err
-	}()
-
-	err := <-errc
-	if err != nil && err == io.EOF {
-		err = nil
-	}
-	return err
+	log.Panicln(server.Serve(ln))
 }

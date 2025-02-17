@@ -1,5 +1,12 @@
 module vpn-proxy-helper
 
-go 1.17
+go 1.22
 
-require github.com/go-gost/gosocks5 v0.4.2
+toolchain go1.23.6
+
+require github.com/things-go/go-socks5 v0.0.5
+
+require (
+	github.com/stretchr/testify v1.10.0 // indirect
+	golang.org/x/net v0.35.0 // indirect
+)
