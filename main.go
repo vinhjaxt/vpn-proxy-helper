@@ -1,17 +1,20 @@
 package main
 
 import (
-	"encoding/binary"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
-	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/go-gost/gosocks5"
+	"github.com/go-gost/gosocks5/server"
 )
 
 type DialFunc func(network, addr string) (net.Conn, error)
@@ -23,6 +26,9 @@ var dialFuncAtomic = &atomic.Value{}
 var dialFunc6Atomic = &atomic.Value{}
 var lastLocalAddr = &atomic.Value{}
 var lastLocal6Addr = &atomic.Value{}
+var handler = &serverHandler{
+	selector: server.DefaultSelector,
+}
 
 func loadDialFunc() {
 	var lastIpv4 net.IP
@@ -160,124 +166,8 @@ func loadDialFunc() {
 
 }
 
-var zeroTime time.Time
-
-func handleConn(l net.Conn) error {
-	defer l.Close()
-	l.SetReadDeadline(time.Now().Add(3 * time.Second))
-
-	{
-		sockVer := make([]byte, 255)
-		l.Read(sockVer)
-		if !(sockVer[0] == 0x05) {
-			return errors.New(`not socks5 protocol`)
-		}
-	}
-
-	/*
-		{
-			sockVer := make([]byte, 2)
-			l.Read(sockVer)
-			if !(sockVer[0] == 0x05) {
-				return errors.New(`not socks5 protocol`)
-			}
-			log.Println(sockVer)
-
-			if sockVer[1] != 0 {
-				l.Read(make([]byte, sockVer[1]))
-			}
-		}
-		// */
-
-	l.Write([]byte{0x05 /* ver */, 0x00 /* no-auth*/})
-
-	connectCmd := make([]byte, 5)
-	l.Read(connectCmd)
-
-	// log.Println(`socks5 connect cmd:`, connectCmd)
-	if !(connectCmd[0] == 0x05 && connectCmd[1] == 0x01 && connectCmd[2] == 0x00) {
-		return errors.New(`not connect cmd`)
-	}
-
-	var dstAddrStr string
-	dstIsV6 := false
-	switch connectCmd[3] {
-	case 0x01:
-		{ // ipv4
-			d := make([]byte, 4)
-			d[0] = connectCmd[4]
-			l.Read(d[1:])
-
-			ip := net.IP(d)
-			dstAddrStr = ip.String()
-			dstIsV6 = ip.To4() == nil
-		}
-	case 0x03:
-		{ //domain
-			domainLen := int(connectCmd[4])
-			domain := make([]byte, domainLen)
-			l.Read(domain)
-
-			dstAddrStr = string(domain)
-		}
-	case 0x04:
-		{ //ipv6
-			d := make([]byte, 16)
-			d[0] = connectCmd[4]
-			l.Read(d[1:])
-
-			ip := net.IP(d)
-			dstAddrStr = ip.String()
-			dstIsV6 = ip.To4() == nil
-		}
-	default:
-		{
-			return errors.New(`not support address type`)
-		}
-	}
-
-	dstPort := make([]byte, 2)
-	l.Read(dstPort)
-
-	dstPortStr := strconv.FormatUint(uint64(binary.BigEndian.Uint16(dstPort)), 10)
-
-	log.Println(`=> [` + dstAddrStr + `]:` + dstPortStr)
-
-	var dialFunc DialFunc
-
-	if dstIsV6 {
-		if v := dialFunc6Atomic.Load(); v == nil {
-			return errors.New(`no dial6 func`)
-		} else {
-			dialFunc = v.(DialFunc)
-		}
-	} else {
-		if v := dialFuncAtomic.Load(); v == nil {
-			return errors.New(`no dial func`)
-		} else {
-			dialFunc = v.(DialFunc)
-		}
-	}
-
-	r, err := dialFunc(`tcp`, `[`+dstAddrStr+`]:`+dstPortStr)
-	if err != nil {
-		l.Write([]byte{0x05, 0x04 /*status*/, 0x00 /*reversed*/, 0x01, 0x00, 0x00, 0x00, 0x00 /* bind address*/, 0x00, 0x00 /* port */})
-		return err
-	}
-	defer r.Close()
-
-	l.Write([]byte{0x05, 0x00 /*status*/, 0x00 /*reversed*/, 0x01, 0x00, 0x00, 0x00, 0x00 /* bind address*/, 0x00, 0x00 /* port */})
-
-	l.SetReadDeadline(zeroTime)
-	go io.CopyBuffer(l, r, make([]byte, 4096))
-	io.CopyBuffer(r, l, make([]byte, 4096))
-	time.Sleep(2 * time.Second)
-
-	return nil
-}
-
 func serve(l net.Conn) {
-	err := handleConn(l)
+	err := handler.Handle(l)
 	if err != nil {
 		log.Println(err)
 	}
@@ -327,4 +217,93 @@ func main() {
 		go serve(conn)
 	}
 
+}
+
+type serverHandler struct {
+	selector gosocks5.Selector
+}
+
+func (h *serverHandler) Handle(conn net.Conn) error {
+	conn = gosocks5.ServerConn(conn, h.selector)
+	req, err := gosocks5.ReadRequest(conn)
+	if err != nil {
+		return err
+	}
+
+	switch req.Cmd {
+	case gosocks5.CmdConnect:
+		return h.handleConnect(conn, req)
+
+	default:
+		return fmt.Errorf("%d: unsupported command", gosocks5.CmdUnsupported)
+	}
+}
+
+func (h *serverHandler) handleConnect(conn net.Conn, req *gosocks5.Request) error {
+
+	log.Println(`=> `, req.Addr.String())
+
+	var dialFunc DialFunc
+
+	if req.Addr.Type == gosocks5.AddrIPv6 {
+		if v := dialFunc6Atomic.Load(); v == nil {
+			return errors.New(`no dial6 func`)
+		} else {
+			dialFunc = v.(DialFunc)
+		}
+	} else {
+		if v := dialFuncAtomic.Load(); v == nil {
+			return errors.New(`no dial func`)
+		} else {
+			dialFunc = v.(DialFunc)
+		}
+	}
+
+	cc, err := dialFunc("tcp", req.Addr.String())
+	if err != nil {
+		rep := gosocks5.NewReply(gosocks5.HostUnreachable, nil)
+		rep.Write(conn)
+		return err
+	}
+	defer cc.Close()
+
+	rep := gosocks5.NewReply(gosocks5.Succeeded, nil)
+	if err := rep.Write(conn); err != nil {
+		return err
+	}
+
+	return transport(conn, cc)
+}
+
+var (
+	trPool = sync.Pool{
+		New: func() interface{} {
+			return make([]byte, 1500)
+		},
+	}
+)
+
+func transport(rw1, rw2 io.ReadWriter) error {
+	errc := make(chan error, 1)
+	go func() {
+		buf := trPool.Get().([]byte)
+		defer trPool.Put(buf)
+
+		_, err := io.CopyBuffer(rw1, rw2, buf)
+		errc <- err
+	}()
+
+	go func() {
+		buf := trPool.Get().([]byte)
+		defer trPool.Put(buf)
+
+		_, err := io.CopyBuffer(rw2, rw1, buf)
+		errc <- err
+	}()
+
+	err := <-errc
+	if err != nil && err == io.EOF {
+		err = nil
+	}
+	return err
 }
